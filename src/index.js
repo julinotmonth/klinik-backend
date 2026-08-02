@@ -10,19 +10,13 @@ const jadwalRoutes = require('./routes/jadwal');
 const antreanRoutes = require('./routes/antrean');
 const rekamMedisRoutes = require('./routes/rekamMedis');
 const settingsRoutes = require('./routes/settings');
-const dokterRoutes = require('./routes/Dokter');
-const jadwalDokterRoutes = require('./routes/Jadwaldokter')
+const dokterRoutes = require('./routes/dokter');
+const jadwalDokterRoutes = require('./routes/jadwalDokter');
+const laporanRoutes = require('./routes/laporan');
 
 const app = express();
 
-app.use(cors({
-  origin: process.env.CORS_ORIGIN 
-    ? process.env.CORS_ORIGIN.split(',') 
-    : ['http://localhost:5173', 'http://localhost:3000'],
-  credentials: true,
-  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization'],
-}));
+app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json());
 app.use(morgan('dev'));
 
@@ -37,6 +31,7 @@ app.use('/api/rekam-medis', rekamMedisRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/dokter', dokterRoutes);
 app.use('/api/jadwal-dokter', jadwalDokterRoutes);
+app.use('/api/laporan', laporanRoutes);
 
 app.use((req, res) => res.status(404).json({ message: 'Endpoint tidak ditemukan.' }));
 

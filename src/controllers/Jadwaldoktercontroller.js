@@ -20,18 +20,19 @@ async function listJadwalDokter(req, res) {
 
 async function createJadwalDokter(req, res) {
   try {
-    const { dokterId, hari, jamMulai, jamSelesai, kuotaMaks } = req.body;
+    const { dokterId, hari, jamMulai, jamSelesai, kuotaMaks, durasiMenit } = req.body;
     if (!dokterId || !hari || !jamMulai || !jamSelesai) {
       return res.status(400).json({ message: 'Dokter, hari, dan jam wajib diisi.' });
     }
     if (!HARI_VALID.includes(hari)) return res.status(400).json({ message: 'Hari tidak valid.' });
     if (jamSelesai <= jamMulai) return res.status(400).json({ message: 'Jam selesai harus setelah jam mulai.' });
+    if (durasiMenit !== undefined && durasiMenit < 1) return res.status(400).json({ message: 'Durasi kunjungan minimal 1 menit.' });
 
     const id = generateId('jd');
     const result = await pool.query(
-      `INSERT INTO jadwal_dokter (id, dokter_id, hari, jam_mulai, jam_selesai, kuota_maks, aktif)
-       VALUES ($1,$2,$3,$4,$5,$6,true) RETURNING *`,
-      [id, dokterId, hari, jamMulai, jamSelesai, kuotaMaks || 20]
+      `INSERT INTO jadwal_dokter (id, dokter_id, hari, jam_mulai, jam_selesai, kuota_maks, durasi_menit, aktif)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,true) RETURNING *`,
+      [id, dokterId, hari, jamMulai, jamSelesai, kuotaMaks || 20, durasiMenit || 15]
     );
     res.status(201).json({ jadwalDokter: mapJadwalDokter(result.rows[0]) });
   } catch (err) {
@@ -42,8 +43,9 @@ async function createJadwalDokter(req, res) {
 
 async function updateJadwalDokter(req, res) {
   try {
-    const { hari, jamMulai, jamSelesai, kuotaMaks, aktif } = req.body;
+    const { hari, jamMulai, jamSelesai, kuotaMaks, durasiMenit, aktif } = req.body;
     if (hari && !HARI_VALID.includes(hari)) return res.status(400).json({ message: 'Hari tidak valid.' });
+    if (durasiMenit !== undefined && durasiMenit < 1) return res.status(400).json({ message: 'Durasi kunjungan minimal 1 menit.' });
 
     const result = await pool.query(
       `UPDATE jadwal_dokter SET
@@ -51,9 +53,10 @@ async function updateJadwalDokter(req, res) {
         jam_mulai = COALESCE($2, jam_mulai),
         jam_selesai = COALESCE($3, jam_selesai),
         kuota_maks = COALESCE($4, kuota_maks),
-        aktif = COALESCE($5, aktif)
-       WHERE id = $6 RETURNING *`,
-      [hari, jamMulai, jamSelesai, kuotaMaks, aktif, req.params.id]
+        durasi_menit = COALESCE($5, durasi_menit),
+        aktif = COALESCE($6, aktif)
+       WHERE id = $7 RETURNING *`,
+      [hari, jamMulai, jamSelesai, kuotaMaks, durasiMenit, aktif, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ message: 'Jadwal tidak ditemukan.' });
     res.json({ jadwalDokter: mapJadwalDokter(result.rows[0]) });
@@ -78,7 +81,8 @@ async function deleteJadwalDokter(req, res) {
 }
 
 // Dipakai di halaman Pendaftaran (pasien): untuk poli + tanggal tertentu, cari dokter
-// yang praktek pada hari itu beserta sisa kuota (kuota_maks dikurangi jumlah antrean aktif).
+// yang praktek pada hari itu beserta sisa kuota (kuota_maks dikurangi jumlah antrean aktif),
+// dan perkiraan jam giliran berikutnya (dipakai untuk reminder H-30 menit).
 async function listTersedia(req, res) {
   try {
     const { poliId, tanggal } = req.query;
@@ -95,17 +99,26 @@ async function listTersedia(req, res) {
       [poliId, tanggal, hari]
     );
 
-    const tersedia = result.rows.map(r => ({
-      jadwalDokterId: r.id,
-      dokterId: r.dokter_id,
-      namaDokter: r.dokter_nama,
-      spesialisasi: r.spesialisasi,
-      hari: r.hari,
-      jamMulai: r.jam_mulai,
-      jamSelesai: r.jam_selesai,
-      kuotaMaks: r.kuota_maks,
-      sisa: Math.max(0, r.kuota_maks - r.terpakai),
-    }));
+    const tersedia = result.rows.map(r => {
+      const sisa = Math.max(0, r.kuota_maks - r.terpakai);
+      const [jamH, jamM] = r.jam_mulai.split(':').map(Number);
+      const estimasiMenit = jamH * 60 + jamM + r.terpakai * r.durasi_menit;
+      const estimasiMulai = `${String(Math.floor(estimasiMenit / 60) % 24).padStart(2, '0')}:${String(estimasiMenit % 60).padStart(2, '0')}`;
+      return {
+        jadwalDokterId: r.id,
+        dokterId: r.dokter_id,
+        namaDokter: r.dokter_nama,
+        spesialisasi: r.spesialisasi,
+        hari: r.hari,
+        jamMulai: r.jam_mulai,
+        jamSelesai: r.jam_selesai,
+        kuotaMaks: r.kuota_maks,
+        durasiMenit: r.durasi_menit,
+        terpakai: r.terpakai,
+        sisa,
+        estimasiMulai,
+      };
+    });
 
     res.json({ hari, tersedia });
   } catch (err) {

@@ -1,5 +1,32 @@
 const pool = require('../db/pool');
 
+const HARI_MAP = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+
+// Menghitung status buka/tutup klinik saat ini berdasarkan jam operasional hari ini.
+function computeStatusBuka(jamOperasionalRows) {
+  const now = new Date();
+  const hariIni = HARI_MAP[now.getDay()];
+  const jamRow = jamOperasionalRows.find((j) => j.hari === hariIni);
+
+  if (!jamRow || !jamRow.aktif) {
+    return { buka: false, label: 'Tutup hari ini', hari: hariIni };
+  }
+
+  const nowMenit = now.getHours() * 60 + now.getMinutes();
+  const [bH, bM] = jamRow.buka.split(':').map(Number);
+  const [tH, tM] = jamRow.tutup.split(':').map(Number);
+  const bukaMenit = bH * 60 + bM;
+  const tutupMenit = tH * 60 + tM;
+  const isBuka = nowMenit >= bukaMenit && nowMenit < tutupMenit;
+
+  let label;
+  if (isBuka) label = `Buka sampai ${jamRow.tutup}`;
+  else if (nowMenit < bukaMenit) label = `Belum buka — mulai ${jamRow.buka}`;
+  else label = `Sudah tutup untuk hari ini`;
+
+  return { buka: isBuka, label, hari: hariIni, jamBuka: jamRow.buka, jamTutup: jamRow.tutup };
+}
+
 async function getSettings(req, res) {
   try {
     const settingsRes = await pool.query('SELECT * FROM klinik_settings WHERE id = 1');
@@ -14,6 +41,7 @@ async function getSettings(req, res) {
         email: s.email,
         kuotaPerHari: s.kuota_per_hari,
         jamOperasional: jamRes.rows.map((j) => ({ hari: j.hari, buka: j.buka, tutup: j.tutup, aktif: j.aktif })),
+        statusBuka: computeStatusBuka(jamRes.rows),
       },
     });
   } catch (err) {
@@ -41,7 +69,6 @@ async function updateSettings(req, res) {
       }
     }
     await client.query('COMMIT');
-    // reload
     const settingsRes = await pool.query('SELECT * FROM klinik_settings WHERE id = 1');
     const jamRes = await pool.query('SELECT * FROM jam_operasional ORDER BY urutan ASC');
     const s = settingsRes.rows[0];
@@ -53,6 +80,7 @@ async function updateSettings(req, res) {
         email: s.email,
         kuotaPerHari: s.kuota_per_hari,
         jamOperasional: jamRes.rows.map((j) => ({ hari: j.hari, buka: j.buka, tutup: j.tutup, aktif: j.aktif })),
+        statusBuka: computeStatusBuka(jamRes.rows),
       },
     });
   } catch (err) {

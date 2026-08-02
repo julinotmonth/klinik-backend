@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS jadwal_dokter (
   jam_mulai      TEXT NOT NULL,
   jam_selesai    TEXT NOT NULL,
   kuota_maks     INT NOT NULL DEFAULT 20,
+  durasi_menit   INT NOT NULL DEFAULT 15,
   aktif          BOOLEAN NOT NULL DEFAULT true
 );
 CREATE INDEX IF NOT EXISTS idx_jadwal_dokter_dokter ON jadwal_dokter(dokter_id);
@@ -71,6 +72,7 @@ CREATE TABLE IF NOT EXISTS antrean (
   tanggal        DATE NOT NULL,
   jam_slot       TEXT NOT NULL,
   status         TEXT NOT NULL CHECK (status IN ('menunggu','dipanggil','selesai','dibatalkan','dilewati')) DEFAULT 'menunggu',
+  sumber         TEXT NOT NULL CHECK (sumber IN ('online','offline')) DEFAULT 'online',
   posisi         INT NOT NULL DEFAULT 1,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -133,3 +135,12 @@ CREATE TABLE IF NOT EXISTS jam_operasional (
 ALTER TABLE antrean ADD COLUMN IF NOT EXISTS dokter_id TEXT REFERENCES dokter(id);
 ALTER TABLE antrean ADD COLUMN IF NOT EXISTS nama_dokter TEXT NOT NULL DEFAULT '';
 ALTER TABLE antrean ADD COLUMN IF NOT EXISTS jadwal_dokter_id TEXT REFERENCES jadwal_dokter(id);
+
+-- ============================================================
+-- Migrasi tambahan (idempotent): durasi kunjungan per jadwal
+-- dokter (menit per pasien) + penanda sumber pendaftaran
+-- (online lewat web, atau offline/walk-in diinput oleh admin).
+-- ============================================================
+ALTER TABLE jadwal_dokter ADD COLUMN IF NOT EXISTS durasi_menit INT NOT NULL DEFAULT 15;
+ALTER TABLE antrean ADD COLUMN IF NOT EXISTS sumber TEXT NOT NULL DEFAULT 'online';
+

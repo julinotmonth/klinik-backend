@@ -96,22 +96,22 @@ const DOKTER = [
 const HARI_KERJA = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
 
 const JADWAL_DOKTER = [
-  // dr. Ahmad Fauzi (Poli Umum) — praktek pagi & sore, Senin-Jumat
-  ...HARI_KERJA.map(hari => ({ dokterId: 'd1', hari, jamMulai: '08:00', jamSelesai: '12:00', kuotaMaks: 20 })),
-  ...HARI_KERJA.map(hari => ({ dokterId: 'd1', hari, jamMulai: '13:00', jamSelesai: '15:00', kuotaMaks: 15 })),
-  // dr. Rina Sari (Poli Anak) — Senin, Rabu, Jumat pagi
-  { dokterId: 'd2', hari: 'Senin', jamMulai: '08:00', jamSelesai: '11:00', kuotaMaks: 15 },
-  { dokterId: 'd2', hari: 'Rabu',  jamMulai: '08:00', jamSelesai: '11:00', kuotaMaks: 15 },
-  { dokterId: 'd2', hari: 'Jumat', jamMulai: '08:00', jamSelesai: '11:00', kuotaMaks: 15 },
-  // drg. Hendra Putra (Poli Gigi) — Selasa & Kamis
-  { dokterId: 'd3', hari: 'Selasa', jamMulai: '09:00', jamSelesai: '14:00', kuotaMaks: 12 },
-  { dokterId: 'd3', hari: 'Kamis',  jamMulai: '09:00', jamSelesai: '14:00', kuotaMaks: 12 },
-  // dr. Dewi Lestari (Poli KIA) — Senin-Jumat pagi
-  ...HARI_KERJA.map(hari => ({ dokterId: 'd4', hari, jamMulai: '08:00', jamSelesai: '12:00', kuotaMaks: 10 })),
-  // dr. Surya Atmaja (Poli Mata) — Selasa, Kamis, Sabtu
-  { dokterId: 'd5', hari: 'Selasa', jamMulai: '08:00', jamSelesai: '11:00', kuotaMaks: 10 },
-  { dokterId: 'd5', hari: 'Kamis',  jamMulai: '08:00', jamSelesai: '11:00', kuotaMaks: 10 },
-  { dokterId: 'd5', hari: 'Sabtu',  jamMulai: '08:00', jamSelesai: '11:00', kuotaMaks: 10 },
+  // dr. Ahmad Fauzi (Poli Umum) — praktek pagi & sore, Senin-Jumat, 15 menit/pasien
+  ...HARI_KERJA.map(hari => ({ dokterId: 'd1', hari, jamMulai: '08:00', jamSelesai: '12:00', kuotaMaks: 20, durasiMenit: 15 })),
+  ...HARI_KERJA.map(hari => ({ dokterId: 'd1', hari, jamMulai: '13:00', jamSelesai: '15:00', kuotaMaks: 15, durasiMenit: 15 })),
+  // dr. Rina Sari (Poli Anak) — Senin, Rabu, Jumat pagi, 15 menit/pasien
+  { dokterId: 'd2', hari: 'Senin', jamMulai: '08:00', jamSelesai: '11:00', kuotaMaks: 15, durasiMenit: 15 },
+  { dokterId: 'd2', hari: 'Rabu',  jamMulai: '08:00', jamSelesai: '11:00', kuotaMaks: 15, durasiMenit: 15 },
+  { dokterId: 'd2', hari: 'Jumat', jamMulai: '08:00', jamSelesai: '11:00', kuotaMaks: 15, durasiMenit: 15 },
+  // drg. Hendra Putra (Poli Gigi) — Selasa & Kamis, 20 menit/pasien
+  { dokterId: 'd3', hari: 'Selasa', jamMulai: '09:00', jamSelesai: '14:00', kuotaMaks: 12, durasiMenit: 20 },
+  { dokterId: 'd3', hari: 'Kamis',  jamMulai: '09:00', jamSelesai: '14:00', kuotaMaks: 12, durasiMenit: 20 },
+  // dr. Dewi Lestari (Poli KIA) — Senin-Jumat pagi, 20 menit/pasien
+  ...HARI_KERJA.map(hari => ({ dokterId: 'd4', hari, jamMulai: '08:00', jamSelesai: '12:00', kuotaMaks: 10, durasiMenit: 20 })),
+  // dr. Surya Atmaja (Poli Mata) — Selasa, Kamis, Sabtu, 15 menit/pasien
+  { dokterId: 'd5', hari: 'Selasa', jamMulai: '08:00', jamSelesai: '11:00', kuotaMaks: 10, durasiMenit: 15 },
+  { dokterId: 'd5', hari: 'Kamis',  jamMulai: '08:00', jamSelesai: '11:00', kuotaMaks: 10, durasiMenit: 15 },
+  { dokterId: 'd5', hari: 'Sabtu',  jamMulai: '08:00', jamSelesai: '11:00', kuotaMaks: 10, durasiMenit: 15 },
 ];
 
 const DEFAULT_PASSWORD = 'password123';
@@ -162,8 +162,8 @@ async function seed() {
     for (let i = 0; i < JADWAL_DOKTER.length; i++) {
       const j = JADWAL_DOKTER[i];
       await client.query(
-        `INSERT INTO jadwal_dokter (id, dokter_id, hari, jam_mulai, jam_selesai, kuota_maks, aktif) VALUES ($1,$2,$3,$4,$5,$6,true)`,
-        [`jd${i + 1}`, j.dokterId, j.hari, j.jamMulai, j.jamSelesai, j.kuotaMaks]
+        `INSERT INTO jadwal_dokter (id, dokter_id, hari, jam_mulai, jam_selesai, kuota_maks, durasi_menit, aktif) VALUES ($1,$2,$3,$4,$5,$6,$7,true)`,
+        [`jd${i + 1}`, j.dokterId, j.hari, j.jamMulai, j.jamSelesai, j.kuotaMaks, j.durasiMenit || 15]
       );
     }
 

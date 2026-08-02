@@ -47,6 +47,20 @@ function mapPoli(row) {
 }
 
 function mapAntrean(row) {
+  let estimasiMulai, waktuIngatkan;
+  if (row.jd_jam_mulai && row.jd_durasi_menit != null) {
+    const [h, m] = row.jd_jam_mulai.split(':').map(Number);
+    const menitMulai = h * 60 + m + (row.posisi - 1) * row.jd_durasi_menit;
+    const menitIngatkan = menitMulai - 30;
+    const fmt = (menit) => {
+      const clamped = Math.max(0, menit);
+      const jam = Math.floor(clamped / 60) % 24;
+      const mnt = clamped % 60;
+      return `${String(jam).padStart(2, '0')}:${String(mnt).padStart(2, '0')}`;
+    };
+    estimasiMulai = fmt(menitMulai);
+    waktuIngatkan = fmt(menitIngatkan);
+  }
   return {
     id: row.id,
     nomorAntrean: row.nomor_antrean,
@@ -65,7 +79,10 @@ function mapAntrean(row) {
     tanggal: toDateStr(row.tanggal),
     jamSlot: row.jam_slot,
     status: row.status,
+    sumber: row.sumber || 'online',
     posisi: row.posisi,
+    estimasiMulai,
+    waktuIngatkan,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -90,6 +107,7 @@ function mapJadwalDokter(row) {
     jamMulai: row.jam_mulai,
     jamSelesai: row.jam_selesai,
     kuotaMaks: row.kuota_maks,
+    durasiMenit: row.durasi_menit,
     aktif: row.aktif,
   };
 }

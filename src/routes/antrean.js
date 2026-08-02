@@ -7,6 +7,7 @@ router.get('/', requireAuth, requireRole('admin'), ctrl.listAntrean);
 router.get('/me', requireAuth, ctrl.listMyAntrean);
 router.get('/:id', requireAuth, ctrl.getAntreanById);
 router.post('/', requireAuth, requireRole('pasien'), ctrl.createAntrean);
+router.post('/walkin', requireAuth, requireRole('admin'), ctrl.createWalkin);
 router.patch('/:id/status', requireAuth, ctrl.updateStatus);
 router.delete('/:id', requireAuth, requireRole('admin'), ctrl.deleteAntrean);
 
