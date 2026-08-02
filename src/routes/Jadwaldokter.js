@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const ctrl = require('../controllers/Jadwaldoktercontroller');
+const ctrl = require('../controllers/jadwalDokterController');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 router.get('/tersedia', ctrl.listTersedia); // publik: dipakai halaman Pendaftaran
