@@ -1,7 +1,23 @@
 const pool = require('../db/pool');
-const { generateId, mapJadwalDokter, hariFromTanggal } = require('../utils/helpers');
+const { generateId, mapJadwalDokter, hariFromTanggal, computeSlotTimes } = require('../utils/helpers');
 
 const HARI_VALID = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'];
+const DURASI_MAKS = 30;
+
+function todayLocalStr() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function isSlotTimePast(tanggal, slotTime) {
+  if (tanggal !== todayLocalStr()) return false;
+  const [h, m] = slotTime.split(':').map(Number);
+  const slotDate = new Date();
+  slotDate.setHours(h, m, 0, 0);
+  return new Date() > slotDate;
+}
 
 async function listJadwalDokter(req, res) {
   try {
@@ -26,13 +42,14 @@ async function createJadwalDokter(req, res) {
     }
     if (!HARI_VALID.includes(hari)) return res.status(400).json({ message: 'Hari tidak valid.' });
     if (jamSelesai <= jamMulai) return res.status(400).json({ message: 'Jam selesai harus setelah jam mulai.' });
-    if (durasiMenit !== undefined && durasiMenit < 1) return res.status(400).json({ message: 'Durasi kunjungan minimal 1 menit.' });
+    const durasi = durasiMenit || 15;
+    if (durasi < 1 || durasi > DURASI_MAKS) return res.status(400).json({ message: `Durasi kunjungan harus antara 1-${DURASI_MAKS} menit.` });
 
     const id = generateId('jd');
     const result = await pool.query(
       `INSERT INTO jadwal_dokter (id, dokter_id, hari, jam_mulai, jam_selesai, kuota_maks, durasi_menit, aktif)
        VALUES ($1,$2,$3,$4,$5,$6,$7,true) RETURNING *`,
-      [id, dokterId, hari, jamMulai, jamSelesai, kuotaMaks || 20, durasiMenit || 15]
+      [id, dokterId, hari, jamMulai, jamSelesai, kuotaMaks || 20, durasi]
     );
     res.status(201).json({ jadwalDokter: mapJadwalDokter(result.rows[0]) });
   } catch (err) {
@@ -45,7 +62,9 @@ async function updateJadwalDokter(req, res) {
   try {
     const { hari, jamMulai, jamSelesai, kuotaMaks, durasiMenit, aktif } = req.body;
     if (hari && !HARI_VALID.includes(hari)) return res.status(400).json({ message: 'Hari tidak valid.' });
-    if (durasiMenit !== undefined && durasiMenit < 1) return res.status(400).json({ message: 'Durasi kunjungan minimal 1 menit.' });
+    if (durasiMenit !== undefined && (durasiMenit < 1 || durasiMenit > DURASI_MAKS)) {
+      return res.status(400).json({ message: `Durasi kunjungan harus antara 1-${DURASI_MAKS} menit.` });
+    }
 
     const result = await pool.query(
       `UPDATE jadwal_dokter SET
@@ -80,9 +99,10 @@ async function deleteJadwalDokter(req, res) {
   }
 }
 
-// Dipakai di halaman Pendaftaran (pasien): untuk poli + tanggal tertentu, cari dokter
-// yang praktek pada hari itu beserta sisa kuota (kuota_maks dikurangi jumlah antrean aktif),
-// dan perkiraan jam giliran berikutnya (dipakai untuk reminder H-30 menit).
+// Dipakai di halaman Pendaftaran (pasien) & modal walk-in (admin): untuk poli + tanggal
+// tertentu, cari dokter yang praktek pada hari itu, beserta breakdown SETIAP slot jam
+// spesifik (bukan cuma angka sisa kuota) — supaya online & offline benar-benar berbagi
+// slot yang sama dan tidak bisa saling menabrak.
 async function listTersedia(req, res) {
   try {
     const { poliId, tanggal } = req.query;
@@ -90,20 +110,39 @@ async function listTersedia(req, res) {
 
     const hari = hariFromTanggal(tanggal);
     const result = await pool.query(
-      `SELECT jd.*, d.nama AS dokter_nama, d.spesialisasi,
-        (SELECT COUNT(*)::int FROM antrean a WHERE a.jadwal_dokter_id = jd.id AND a.tanggal = $2 AND a.status != 'dibatalkan') AS terpakai
+      `SELECT jd.*, d.nama AS dokter_nama, d.spesialisasi
        FROM jadwal_dokter jd
        JOIN dokter d ON d.id = jd.dokter_id
-       WHERE d.poli_id = $1 AND d.aktif = true AND jd.aktif = true AND jd.hari = $3
+       WHERE d.poli_id = $1 AND d.aktif = true AND jd.aktif = true AND jd.hari = $2 AND d.poli_id IS NOT NULL
        ORDER BY jd.jam_mulai ASC`,
-      [poliId, tanggal, hari]
+      [poliId, hari]
     );
 
+    const jadwalIds = result.rows.map(r => r.id);
+    let takenByJadwal = {};
+    if (jadwalIds.length > 0) {
+      const takenRes = await pool.query(
+        `SELECT jadwal_dokter_id, jam_booking FROM antrean
+         WHERE jadwal_dokter_id = ANY($1::text[]) AND tanggal = $2::date AND status != 'dibatalkan' AND jam_booking IS NOT NULL`,
+        [jadwalIds, tanggal]
+      );
+      takenByJadwal = takenRes.rows.reduce((acc, r) => {
+        (acc[r.jadwal_dokter_id] = acc[r.jadwal_dokter_id] || new Set()).add(r.jam_booking);
+        return acc;
+      }, {});
+    }
+
     const tersedia = result.rows.map(r => {
-      const sisa = Math.max(0, r.kuota_maks - r.terpakai);
-      const [jamH, jamM] = r.jam_mulai.split(':').map(Number);
-      const estimasiMenit = jamH * 60 + jamM + r.terpakai * r.durasi_menit;
-      const estimasiMulai = `${String(Math.floor(estimasiMenit / 60) % 24).padStart(2, '0')}:${String(estimasiMenit % 60).padStart(2, '0')}`;
+      const allSlots = computeSlotTimes(r.jam_mulai, r.jam_selesai, r.durasi_menit, r.kuota_maks);
+      const taken = takenByJadwal[r.id] || new Set();
+      const slots = allSlots.map(jam => ({
+        jam,
+        tersedia: !taken.has(jam) && !isSlotTimePast(tanggal, jam),
+        lewat: isSlotTimePast(tanggal, jam),
+      }));
+      const sisa = slots.filter(s => s.tersedia).length;
+      const slotBerikutnya = slots.find(s => s.tersedia)?.jam || null;
+
       return {
         jadwalDokterId: r.id,
         dokterId: r.dokter_id,
@@ -114,9 +153,10 @@ async function listTersedia(req, res) {
         jamSelesai: r.jam_selesai,
         kuotaMaks: r.kuota_maks,
         durasiMenit: r.durasi_menit,
-        terpakai: r.terpakai,
+        terpakai: allSlots.length - sisa,
         sisa,
-        estimasiMulai,
+        estimasiMulai: slotBerikutnya,
+        slots,
       };
     });
 

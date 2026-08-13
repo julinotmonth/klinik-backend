@@ -5,11 +5,11 @@ const today = new Date().toISOString().split('T')[0];
 const inDays = (n) => new Date(Date.now() + n * 86400000).toISOString().split('T')[0];
 
 const POLI = [
-  { id: 'p1', nama: 'Poli Umum', singkatan: 'U', deskripsi: 'Pemeriksaan umum & keluhan ringan', dokter: 'dr. Ahmad Fauzi, Sp.PD', icon: '🩺', urutan: 1 },
-  { id: 'p2', nama: 'Poli Anak', singkatan: 'A', deskripsi: 'Kesehatan bayi dan anak-anak', dokter: 'dr. Rina Sari, Sp.A', icon: '👶', urutan: 2 },
-  { id: 'p3', nama: 'Poli Gigi', singkatan: 'G', deskripsi: 'Perawatan dan kesehatan gigi', dokter: 'drg. Hendra Putra', icon: '🦷', urutan: 3 },
-  { id: 'p4', nama: 'Poli KIA', singkatan: 'K', deskripsi: 'Kesehatan ibu dan anak', dokter: 'dr. Dewi Lestari, Sp.OG', icon: '🤱', urutan: 4 },
-  { id: 'p5', nama: 'Poli Mata', singkatan: 'M', deskripsi: 'Pemeriksaan dan perawatan mata', dokter: 'dr. Surya Atmaja, Sp.M', icon: '👁️', urutan: 5 },
+  { id: 'p1', nama: 'Poli Umum', singkatan: 'U', deskripsi: 'Pemeriksaan umum & keluhan ringan', dokter: 'dr. Ahmad Fauzi, Sp.PD', icon: '🩺', urutan: 1, bisaBookingOnline: false },
+  { id: 'p2', nama: 'Poli Anak', singkatan: 'A', deskripsi: 'Kesehatan bayi dan anak-anak', dokter: 'dr. Rina Sari, Sp.A', icon: '👶', urutan: 2, bisaBookingOnline: false },
+  { id: 'p3', nama: 'Poli Gigi', singkatan: 'G', deskripsi: 'Perawatan dan kesehatan gigi', dokter: 'drg. Hendra Putra', icon: '🦷', urutan: 3, bisaBookingOnline: true },
+  { id: 'p4', nama: 'Poli KIA', singkatan: 'K', deskripsi: 'Kesehatan ibu dan anak', dokter: 'dr. Dewi Lestari, Sp.OG', icon: '🤱', urutan: 4, bisaBookingOnline: false },
+  { id: 'p5', nama: 'Poli Mata', singkatan: 'M', deskripsi: 'Pemeriksaan dan perawatan mata', dokter: 'dr. Surya Atmaja, Sp.M', icon: '👁️', urutan: 5, bisaBookingOnline: false },
 ];
 
 const JAM_SLOTS = [
@@ -137,8 +137,8 @@ async function seed() {
     console.log('Seeding poli...');
     for (const p of POLI) {
       await client.query(
-        `INSERT INTO poli (id, nama, singkatan, deskripsi, dokter, icon, urutan) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [p.id, p.nama, p.singkatan, p.deskripsi, p.dokter, p.icon, p.urutan]
+        `INSERT INTO poli (id, nama, singkatan, deskripsi, dokter, icon, urutan, bisa_booking_online) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [p.id, p.nama, p.singkatan, p.deskripsi, p.dokter, p.icon, p.urutan, p.bisaBookingOnline]
       );
     }
 

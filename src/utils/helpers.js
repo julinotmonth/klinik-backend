@@ -43,23 +43,29 @@ function mapPoli(row) {
     deskripsi: row.deskripsi,
     dokter: row.dokter,
     icon: row.icon,
+    bisaBookingOnline: row.bisa_booking_online !== false,
   };
 }
 
 function mapAntrean(row) {
   let estimasiMulai, waktuIngatkan;
-  if (row.jd_jam_mulai && row.jd_durasi_menit != null) {
+  const fmt = (menit) => {
+    const clamped = Math.max(0, menit);
+    const jam = Math.floor(clamped / 60) % 24;
+    const mnt = clamped % 60;
+    return `${String(jam).padStart(2, '0')}:${String(mnt).padStart(2, '0')}`;
+  };
+  if (row.jam_booking) {
+    // Slot spesifik sudah ditetapkan saat booking — ini sumber kebenaran paling akurat.
+    const [h, m] = row.jam_booking.split(':').map(Number);
+    estimasiMulai = row.jam_booking;
+    waktuIngatkan = fmt(h * 60 + m - 30);
+  } else if (row.jd_jam_mulai && row.jd_durasi_menit != null) {
+    // Fallback untuk data lama (sebelum sistem slot spesifik) yang belum punya jam_booking.
     const [h, m] = row.jd_jam_mulai.split(':').map(Number);
     const menitMulai = h * 60 + m + (row.posisi - 1) * row.jd_durasi_menit;
-    const menitIngatkan = menitMulai - 30;
-    const fmt = (menit) => {
-      const clamped = Math.max(0, menit);
-      const jam = Math.floor(clamped / 60) % 24;
-      const mnt = clamped % 60;
-      return `${String(jam).padStart(2, '0')}:${String(mnt).padStart(2, '0')}`;
-    };
     estimasiMulai = fmt(menitMulai);
-    waktuIngatkan = fmt(menitIngatkan);
+    waktuIngatkan = fmt(menitMulai - 30);
   }
   return {
     id: row.id,
@@ -78,6 +84,7 @@ function mapAntrean(row) {
     jadwalDokterId: row.jadwal_dokter_id || undefined,
     tanggal: toDateStr(row.tanggal),
     jamSlot: row.jam_slot,
+    jamBooking: row.jam_booking || undefined,
     status: row.status,
     sumber: row.sumber || 'online',
     posisi: row.posisi,
@@ -86,6 +93,26 @@ function mapAntrean(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+// Menghasilkan daftar slot jam diskrit untuk sebuah jadwal dokter, mis. jam_mulai=08:00,
+// jam_selesai=09:00, durasi_menit=15 -> ['08:00','08:15','08:30','08:45']. Jumlah slot juga
+// dibatasi oleh kuota_maks kalau itu lebih kecil dari kapasitas berbasis waktu.
+function computeSlotTimes(jamMulai, jamSelesai, durasiMenit, kuotaMaks) {
+  const [mh, mm] = jamMulai.split(':').map(Number);
+  const [sh, sm] = jamSelesai.split(':').map(Number);
+  const startMenit = mh * 60 + mm;
+  const endMenit = sh * 60 + sm;
+  const slots = [];
+  for (let t = startMenit; t < endMenit; t += durasiMenit) {
+    const jam = Math.floor(t / 60) % 24;
+    const mnt = t % 60;
+    slots.push(`${String(jam).padStart(2, '0')}:${String(mnt).padStart(2, '0')}`);
+  }
+  if (typeof kuotaMaks === 'number' && kuotaMaks > 0 && kuotaMaks < slots.length) {
+    return slots.slice(0, kuotaMaks);
+  }
+  return slots;
 }
 
 function mapDokter(row) {
@@ -148,4 +175,4 @@ function hariFromTanggal(tanggalStr) {
   return HARI_MAP[dt.getDay()];
 }
 
-module.exports = { generateId, toDateStr, mapUser, mapPoli, mapAntrean, mapRekamMedis, mapDokter, mapJadwalDokter, hariFromTanggal };
+module.exports = { generateId, toDateStr, mapUser, mapPoli, mapAntrean, mapRekamMedis, mapDokter, mapJadwalDokter, hariFromTanggal, computeSlotTimes };

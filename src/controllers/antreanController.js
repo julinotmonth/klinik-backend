@@ -1,5 +1,5 @@
 const pool = require('../db/pool');
-const { generateId, mapAntrean, hariFromTanggal } = require('../utils/helpers');
+const { generateId, mapAntrean, hariFromTanggal, computeSlotTimes } = require('../utils/helpers');
 
 function todayLocalStr() {
   const d = new Date();
@@ -9,15 +9,14 @@ function todayLocalStr() {
   return `${y}-${m}-${day}`;
 }
 
-// jamSelesai contoh: "12:00" — dianggap lewat kalau tanggal === hari ini DAN jam
-// sekarang sudah melewati jam SELESAI jadwal tersebut. Sesi yang sedang berlangsung
-// (sudah mulai tapi belum selesai) masih dianggap valid untuk didaftarkan.
-function isSlotPast(tanggal, jamSelesai) {
+// Sebuah slot jam spesifik (mis. "08:15") dianggap sudah lewat kalau tanggal yang
+// dipilih adalah hari ini DAN jam sekarang sudah melewati jam mulai slot tersebut.
+function isSlotTimePast(tanggal, slotTime) {
   if (tanggal !== todayLocalStr()) return false;
-  const [h, m] = jamSelesai.split(':').map(Number);
-  const slotEnd = new Date();
-  slotEnd.setHours(h, m, 0, 0);
-  return new Date() > slotEnd;
+  const [h, m] = slotTime.split(':').map(Number);
+  const slotDate = new Date();
+  slotDate.setHours(h, m, 0, 0);
+  return new Date() > slotDate;
 }
 
 const ANTREAN_SELECT = `
@@ -67,15 +66,22 @@ async function getAntreanById(req, res) {
 }
 
 // Logika inti booking, dipakai bersama oleh pendaftaran online (pasien) dan
-// input walk-in/offline oleh admin — memastikan keduanya memakai kuota &
-// penomoran antrean yang sama persis (integrasi online & offline).
-async function bookAntrean(client, { userId, sumber, namaLengkap, nik, noHp, jenisKelamin, tanggalLahir, alamat, poliId, tanggal, jadwalDokterId }) {
+// input walk-in/offline oleh admin. Setiap pasien mendapat SLOT JAM SPESIFIK
+// (bukan sekadar kuota umum) — begitu satu slot terisi (baik lewat online
+// maupun offline), slot itu otomatis tidak bisa diambil lagi oleh siapa pun;
+// pendaftar berikutnya otomatis mendapat slot kosong terdekat setelahnya.
+async function bookAntrean(client, { userId, sumber, namaLengkap, nik, noHp, jenisKelamin, tanggalLahir, alamat, poliId, tanggal, jadwalDokterId, jamBookingPilihan }) {
   await client.query('BEGIN');
   await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`${jadwalDokterId}|${tanggal}`]);
 
   const poliRes = await client.query('SELECT * FROM poli WHERE id = $1', [poliId]);
   const poli = poliRes.rows[0];
   if (!poli) { await client.query('ROLLBACK'); return { error: { status: 404, message: 'Poli tidak ditemukan.' } }; }
+
+  if (sumber === 'online' && poli.bisa_booking_online === false) {
+    await client.query('ROLLBACK');
+    return { error: { status: 400, message: `Pendaftaran online untuk ${poli.nama} belum tersedia saat ini. Silakan datang langsung ke klinik.` } };
+  }
 
   const jadwalRes = await client.query(
     `SELECT jd.*, d.nama AS dokter_nama, d.poli_id AS dokter_poli_id, d.aktif AS dokter_aktif
@@ -96,18 +102,38 @@ async function bookAntrean(client, { userId, sumber, namaLengkap, nik, noHp, jen
     await client.query('ROLLBACK');
     return { error: { status: 400, message: `Dokter ini tidak praktek pada hari ${hariFromTanggal(tanggal)}. Silakan pilih tanggal lain.` } };
   }
-  // Admin (walk-in) boleh tetap mencatat pasien yang datang meski jam praktik hampir/telah berakhir;
-  // validasi jam-sudah-lewat hanya berlaku untuk pendaftaran online.
-  if (sumber === 'online' && isSlotPast(tanggal, jadwal.jam_selesai)) {
+
+  const allSlots = computeSlotTimes(jadwal.jam_mulai, jadwal.jam_selesai, jadwal.durasi_menit, jadwal.kuota_maks);
+  const futureSlots = allSlots.filter(s => !isSlotTimePast(tanggal, s));
+  if (futureSlots.length === 0) {
     await client.query('ROLLBACK');
     return { error: { status: 400, message: 'Jam praktik tersebut sudah lewat untuk hari ini. Silakan pilih jadwal lain.' } };
   }
 
-  const terpakaiRes = await client.query(
-    `SELECT COUNT(*)::int AS jumlah FROM antrean WHERE jadwal_dokter_id = $1 AND tanggal = $2 AND status != 'dibatalkan'`,
+  const takenRes = await client.query(
+    `SELECT jam_booking FROM antrean WHERE jadwal_dokter_id = $1 AND tanggal = $2 AND status != 'dibatalkan' AND jam_booking IS NOT NULL`,
     [jadwalDokterId, tanggal]
   );
-  if (terpakaiRes.rows[0].jumlah >= jadwal.kuota_maks) {
+  const taken = new Set(takenRes.rows.map(r => r.jam_booking));
+  let slotTerpilih;
+  if (jamBookingPilihan) {
+    if (!allSlots.includes(jamBookingPilihan)) {
+      await client.query('ROLLBACK');
+      return { error: { status: 400, message: 'Slot jam yang dipilih tidak valid.' } };
+    }
+    if (isSlotTimePast(tanggal, jamBookingPilihan)) {
+      await client.query('ROLLBACK');
+      return { error: { status: 400, message: 'Slot jam tersebut sudah lewat. Silakan pilih slot lain.' } };
+    }
+    if (taken.has(jamBookingPilihan)) {
+      await client.query('ROLLBACK');
+      return { error: { status: 409, message: 'Slot jam tersebut baru saja terisi orang lain. Silakan pilih slot lain.' } };
+    }
+    slotTerpilih = jamBookingPilihan;
+  } else {
+    slotTerpilih = futureSlots.find(s => !taken.has(s));
+  }
+  if (!slotTerpilih) {
     await client.query('ROLLBACK');
     return { error: { status: 409, message: 'Kuota dokter tersebut untuk tanggal ini sudah penuh. Silakan pilih jadwal lain.' } };
   }
@@ -119,18 +145,24 @@ async function bookAntrean(client, { userId, sumber, namaLengkap, nik, noHp, jen
   const nomorUrut = countPoliRes.rows[0].jumlah + 1;
   const nomorAntrean = `${poli.singkatan}-${String(nomorUrut).padStart(3, '0')}`;
 
+  // Posisi urut antrean = jumlah pendaftar aktif dengan slot jam LEBIH AWAL dari slot ini, + 1.
+  // Ini tetap akurat meski ada slot-slot awal yang terlewat/tidak diisi siapa pun.
   const posisiRes = await client.query(
-    `SELECT COUNT(*)::int AS jumlah FROM antrean WHERE jadwal_dokter_id = $1 AND tanggal = $2 AND status IN ('menunggu','dipanggil')`,
-    [jadwalDokterId, tanggal]
+    `SELECT COUNT(*)::int AS jumlah FROM antrean
+     WHERE jadwal_dokter_id = $1 AND tanggal = $2 AND status IN ('menunggu','dipanggil') AND jam_booking < $3`,
+    [jadwalDokterId, tanggal, slotTerpilih]
   );
   const posisi = posisiRes.rows[0].jumlah + 1;
 
-  const jamSlot = `${jadwal.jam_mulai} - ${jadwal.jam_selesai}`;
+  const [slotH, slotM] = slotTerpilih.split(':').map(Number);
+  const slotEndMenit = slotH * 60 + slotM + jadwal.durasi_menit;
+  const slotEnd = `${String(Math.floor(slotEndMenit / 60) % 24).padStart(2, '0')}:${String(slotEndMenit % 60).padStart(2, '0')}`;
+  const jamSlot = `${slotTerpilih} - ${slotEnd}`;
   const id = generateId('aq');
   const insertRes = await client.query(
-    `INSERT INTO antrean (id, nomor_antrean, user_id, nama_lengkap, nik, no_hp, jenis_kelamin, tanggal_lahir, alamat, poli_id, nama_poli, dokter_id, nama_dokter, jadwal_dokter_id, tanggal, jam_slot, status, sumber, posisi, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'menunggu',$17,$18, now(), now()) RETURNING *`,
-    [id, nomorAntrean, userId, namaLengkap, nik, noHp, jenisKelamin, tanggalLahir, alamat, poliId, poli.nama, jadwal.dokter_id, jadwal.dokter_nama, jadwalDokterId, tanggal, jamSlot, sumber, posisi]
+    `INSERT INTO antrean (id, nomor_antrean, user_id, nama_lengkap, nik, no_hp, jenis_kelamin, tanggal_lahir, alamat, poli_id, nama_poli, dokter_id, nama_dokter, jadwal_dokter_id, tanggal, jam_slot, jam_booking, status, sumber, posisi, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'menunggu',$18,$19, now(), now()) RETURNING *`,
+    [id, nomorAntrean, userId, namaLengkap, nik, noHp, jenisKelamin, tanggalLahir, alamat, poliId, poli.nama, jadwal.dokter_id, jadwal.dokter_nama, jadwalDokterId, tanggal, jamSlot, slotTerpilih, sumber, posisi]
   );
 
   await client.query('COMMIT');
@@ -141,7 +173,7 @@ async function bookAntrean(client, { userId, sumber, namaLengkap, nik, noHp, jen
 async function createAntrean(req, res) {
   const client = await pool.connect();
   try {
-    const { namaLengkap, nik, noHp, jenisKelamin, tanggalLahir, alamat, poliId, tanggal, jadwalDokterId } = req.body;
+    const { namaLengkap, nik, noHp, jenisKelamin, tanggalLahir, alamat, poliId, tanggal, jadwalDokterId, jamBooking } = req.body;
 
     if (!namaLengkap || !nik || !noHp || !jenisKelamin || !tanggalLahir || !alamat || !poliId || !tanggal || !jadwalDokterId) {
       return res.status(400).json({ message: 'Data pendaftaran belum lengkap.' });
@@ -149,7 +181,7 @@ async function createAntrean(req, res) {
 
     const result = await bookAntrean(client, {
       userId: req.user.id, sumber: 'online',
-      namaLengkap, nik, noHp, jenisKelamin, tanggalLahir, alamat, poliId, tanggal, jadwalDokterId,
+      namaLengkap, nik, noHp, jenisKelamin, tanggalLahir, alamat, poliId, tanggal, jadwalDokterId, jamBookingPilihan: jamBooking,
     });
     if (result.error) return res.status(result.error.status).json({ message: result.error.message });
     res.status(201).json({ antrean: result.antrean });
@@ -163,11 +195,12 @@ async function createAntrean(req, res) {
 }
 
 // Admin: catat pasien yang datang langsung (walk-in/offline) ke dalam antrean yang
-// sama persis dengan pendaftaran online, supaya kuota & nomor antrean tetap konsisten.
+// sama persis dengan pendaftaran online — berbagi slot jam yang sama, sehingga
+// otomatis tidak akan tabrakan dengan pasien yang sudah booking online.
 async function createWalkin(req, res) {
   const client = await pool.connect();
   try {
-    const { namaLengkap, nik, noHp, jenisKelamin, tanggalLahir, alamat, poliId, tanggal, jadwalDokterId } = req.body;
+    const { namaLengkap, nik, noHp, jenisKelamin, tanggalLahir, alamat, poliId, tanggal, jadwalDokterId, jamBooking } = req.body;
 
     if (!namaLengkap || !nik || !noHp || !jenisKelamin || !tanggalLahir || !alamat || !poliId || !tanggal || !jadwalDokterId) {
       return res.status(400).json({ message: 'Data pendaftaran belum lengkap.' });
@@ -178,7 +211,7 @@ async function createWalkin(req, res) {
 
     const result = await bookAntrean(client, {
       userId, sumber: 'offline',
-      namaLengkap, nik, noHp, jenisKelamin, tanggalLahir, alamat, poliId, tanggal, jadwalDokterId,
+      namaLengkap, nik, noHp, jenisKelamin, tanggalLahir, alamat, poliId, tanggal, jadwalDokterId, jamBookingPilihan: jamBooking,
     });
     if (result.error) return res.status(result.error.status).json({ message: result.error.message });
     res.status(201).json({ antrean: result.antrean });
